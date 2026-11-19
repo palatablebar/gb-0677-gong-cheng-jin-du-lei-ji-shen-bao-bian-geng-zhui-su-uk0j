@@ -13,6 +13,7 @@
 | M5 扣回核算 | 查看并运行扣回核算 | `/api/deductions` | `app/modules/m5_deductions/rules.py` | `tests/test_m5.py` |
 | M6 进度对账 | 查看并运行进度对账 | `/api/valuation` | `app/modules/m6_valuation/rules.py` | `tests/test_m6.py` |
 | M7 签证归档 | 查看并运行签证归档 | `/api/certificates` | `app/modules/m7_certificates/rules.py` | `tests/test_m7.py` |
+| M8 回单脱敏签证 | 导入原件、发布脱敏签证、按角色回查 | `/receipts` | `app/receipts/` | `tests/test_receipts.py` |
 
 ## 陷阱登记
 
@@ -30,6 +31,12 @@
 | TRAP-07 | 累计量空值 | 按零冲回 | 隔离缺失 | `app/values.py` | `tests/test_m2.py::test_real_null_not_zero` |
 | TRAP-10 | 分币舍入 | 浮点误差 | 分项量化后净额守恒 | `app/modules/m5_deductions/rules.py` | `tests/test_m5.py::test_fraction_rounds_to_cent` |
 | TRAP-23 | 变更生效边界 | 旧价覆盖 | 按周期选择已批版本 | `app/modules/m3_changes/rules.py` | `tests/test_m3.py::test_effective_boundary` |
+| TRAP-31 | 直接导出泄露PII | 原样外发联系人/身份证 | 只产脱敏副本，原件0600留存 | `app/receipts/masking.py` | `tests/test_receipts.py::test_masked_row_has_no_original_pii` |
+| TRAP-32 | 脱敏覆盖原值 | 源文件被改写后不可恢复 | 原件只插入不更新，同号异内容409 | `app/receipts/storage.py` | `tests/test_receipts.py::test_same_receipt_no_different_content_rejected_409` |
+| TRAP-33 | 争议行无法回溯 | 脱敏后与原件断链 | HMAC令牌+原件重算比对 | `app/receipts/service.py` | `tests/test_receipts.py::test_reveal_binds_masked_row_back_to_original` |
+| TRAP-34 | 发布失败新旧混杂 | 半成功状态对外可见 | 单事务回滚，旧发布指针保留 | `app/receipts/service.py` | `tests/test_receipts.py::test_publish_failure_keeps_old_version` |
+| TRAP-35 | 重试重复建签证 | 同一回单多次纳入 | (visa_no,source_sha256)台账幂等 | `app/receipts/service.py` | `tests/test_receipts.py::test_retry_publish_same_receipts_returns_reused_no_new_visa` |
+| TRAP-36 | 越权回查原件 | 角色自报即可取值 | 权限矩阵+回查审计留痕 | `app/receipts/roles.py` | `tests/test_receipts.py::test_role_matrix_for_publish_and_reveal` |
 
 ## 对账规则
 

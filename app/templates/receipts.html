@@ -1,0 +1,133 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>回单脱敏签证 · 工作台</title>
+<link rel="stylesheet" href="/static/theme.css"><link rel="stylesheet" href="/static/layout.css"><link rel="stylesheet" href="/static/components.css">
+<style>
+.rolebar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.rolebar .chip{padding:4px 12px;border:1px solid #b9c2cf;border-radius:999px;background:#fff;cursor:pointer;font-size:13px}
+.rolebar .chip.on{background:#1f3a5f;color:#fff;border-color:#1f3a5f}
+.masked{font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.5px}.ok{color:#1a7f37}.bad{color:#c0392b}.muted{color:#6b7785;font-size:12px}
+.perm{font-size:12px;color:#6b7785}.perm b{color:#1f3a5f}
+.tag{display:inline-block;padding:1px 8px;border-radius:4px;font-size:12px}.tag.created{background:#e6f4ea;color:#1a7f37}.tag.reused{background:#eef1f5;color:#5a6b7f}.tag.failed{background:#fdecea;color:#c0392b}
+details{border:1px solid #e2e7ee;border-radius:8px;padding:8px 12px;margin-top:8px;background:#fafbfc}summary{cursor:pointer;font-weight:600}
+pre{white-space:pre-wrap;word-break:break-all;background:#f4f6f9;border-radius:6px;padding:10px;font-size:12px}
+</style></head>
+<body><div class="app">
+<aside class="rail"><div class="stamp">脱敏签证</div><nav>
+<a href="/valuation">06 / 进度对账</a><a href="/certificates">07 / 签证归档</a>
+<a href="/receipts" class="active">08 / 回单脱敏签证</a></nav>
+<small>原件仅入库不外发<br>对外只出脱敏件</small></aside>
+<div class="work"><header class="topbar"><h1>回单脱敏签证</h1>
+<a class="btn" id="exportBtn">导出脱敏签证 CSV</a></header>
+<main class="content">
+<section class="panel"><div class="panel__head"><h2>当前角色</h2><span id="permText" class="perm"></span></div>
+<div class="panel__body rolebar" id="roles"></div></section>
+
+<section class="panel"><div class="panel__head"><h2>1 · 导入分包回单</h2><span>原件留存，覆盖式导入将被拒绝</span></div>
+<div class="panel__body inputs">
+<input type="file" id="receiptFile" accept=".csv" aria-label="回单CSV">
+<button id="ingestBtn" class="primary">导入原件</button>
+<span id="ingestNotice" role="status" class="muted"></span></div></section>
+
+<section class="panel"><div class="panel__head"><h2>2 · 构建与发布脱敏签证</h2><span>失败自动回滚，旧版保留</span></div>
+<div class="panel__body inputs">
+<input id="period" value="2026-11" aria-label="签证周期" style="width:120px">
+<button id="buildBtn">构建预览</button>
+<button id="publishBtn" class="primary">发布（财务）</button>
+<label class="muted"><input type="checkbox" id="simFail"> 模拟发布失败</label>
+<span id="publishNotice" role="status"></span></div>
+<div class="panel__body" id="buildOut" class="muted"></div></section>
+
+<section class="panel"><div class="panel__head"><h2>3 · 当前生效签证（对外展示）</h2><span id="visaMeta" class="muted"></span></div>
+<div class="table-scroll"><table class="ledger"><thead id="visaHead"></thead><tbody id="visaBody"></tbody></table></div>
+<div class="signature"><span>字段均为脱敏值 + HMAC 令牌摘要</span><span id="verifyState"></span></div></section>
+
+<section class="panel"><div class="panel__head"><h2>4 · 争议行回查原始凭据</h2><span class="perm">仅 <b>财务 / 审计</b> 可取回原值并自动留痕</span></div>
+<div class="panel__body inputs"><input id="traceNo" placeholder="输入回单号，如 FB2026110001" aria-label="回单号">
+<button id="revealBtn">回查原件</button><span id="revealNotice" class="muted"></span></div>
+<pre id="revealOut" class="muted">尚未回查。</pre></section>
+
+<section class="panel"><div class="panel__head"><h2>5 · 版本、发布留痕与审计日志</h2></div>
+<div class="panel__body"><details><summary>签证版本与发布尝试</summary><pre id="versionsOut">加载中…</pre></details>
+<details><summary>审计日志（仅审计角色可见）</summary><pre id="auditOut">加载中…</pre></details></div></section>
+</main>
+<footer class="statusbar"><span id="footRole">角色 经办</span><span>对外=脱敏展示 / 回查=财务·审计 / 发布=财务 / 审计日志=审计</span></footer>
+</div></div>
+<script>
+const ROLES=[["clerk","经办"],["general","总包"],["finance","财务"],["auditor","审计"]];
+const LABEL={clerk:"经办",general:"总包",finance:"财务",auditor:"审计"};
+let role="clerk", activeVisa=null;
+const $=id=>document.getElementById(id);
+async function api(path,opt={}){
+  opt.headers=Object.assign({"X-Role":role},opt.headers||{});
+  if(opt.body&&!(opt.body instanceof FormData)){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(opt.body);}
+  const r=await fetch(path,opt);const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw Object.assign(new Error(j.message||r.statusText),{code:j.code,status:r.status});
+  return j;
+}
+const PERMS={clerk:{view_masked:1,export:1,verify:1,publish:0,reveal:0,audit_log:0},
+  general:{view_masked:1,export:1,verify:1,publish:0,reveal:0,audit_log:0},
+  finance:{view_masked:1,export:1,verify:1,publish:1,reveal:1,audit_log:0},
+  auditor:{view_masked:1,export:1,verify:1,publish:0,reveal:1,audit_log:1}};
+function renderRoles(){
+  $("roles").innerHTML=ROLES.map(([k,label])=>`<span class="chip ${k===role?'on':''}" data-r="${k}">${label}</span>`).join("");
+  document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{role=c.dataset.r;refreshAll();});
+  const p=PERMS[role];
+  $("permText").innerHTML=`脱敏查看✓ 导出${p.export?'✓':'✗'} 核验✓ 发布${p.publish?'✓':'✗'} 原件回查${p.reveal?'✓':'✗'} 审计日志${p.audit_log?'✓':'✗'}`;
+  $("footRole").textContent="角色 "+LABEL[role];
+  $("publishBtn").disabled=!p.publish;$("revealBtn").disabled=!p.reveal;
+}
+function esc(s){return String(s??"—").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+function renderVisa(v){
+  activeVisa=v;
+  if(!v){$("visaHead").innerHTML="";$("visaBody").innerHTML='<tr><td class="empty">尚未发布签证。</td></tr>';$("visaMeta").textContent="";$("verifyState").textContent="";return;}
+  const cols=[["receipt_no","回单号"],["subcontractor","分包单位"],["contact","联系人(脱敏)"],["id_card","身份证(脱敏)"],["phone","电话(脱敏)"],["bank_account","账号(脱敏)"],["item","清单项"],["amount","金额"],["source_sha256","原件摘要"],["line_digest","行摘要"]];
+  $("visaMeta").textContent=`${v.visa_no} · V${v.version} · ${v.period} · 规则 ${v.rule_version}`;
+  $("visaHead").innerHTML="<tr>"+cols.map(c=>`<th>${c[1]}</th>`).join("")+"</tr>";
+  $("visaBody").innerHTML=v.rows.map(r=>"<tr>"+cols.map(c=>{
+    const masked=["contact","id_card","phone","bank_account"].includes(c[0]);
+    return `<td class="${masked?'masked':''}" title="${esc(r['_pii']&&r['_pii'][c[0]]?('令牌 '+r['_pii'][c[0]]):'')}">${esc(r[c[0]])}</td>`;}).join("")+"</tr>").join("");
+  api(`/api/receipts/visa/${v.visa_no}/verify`).then(rep=>{
+    $("verifyState").innerHTML=rep.lines_ok&&rep.document_digest_ok
+      ?'<span class="ok">公开核验通过：行摘要与文档摘要均匹配</span>'
+      :'<span class="bad">核验失败：签证内容被改动</span>';
+  }).catch(e=>$("verifyState").innerHTML=`<span class="bad">${esc(e.message)}</span>`);
+}
+async function refreshAll(){
+  renderRoles();
+  try{const j=await api("/api/receipts/visa/active");renderVisa(j.visa);}
+  catch(e){$("visaMeta").textContent=e.message;}
+  api("/api/receipts/visa/versions").then(j=>{
+    $("versionsOut").textContent=JSON.stringify({versions:j.versions,attempts:j.attempts},null,2);
+  }).catch(e=>$("versionsOut").textContent=e.message);
+  if(PERMS[role].audit_log){api("/api/receipts/audit-log").then(j=>$("auditOut").textContent=JSON.stringify(j.entries,null,2))
+    .catch(e=>$("auditOut").textContent=e.message);}
+  else $("auditOut").textContent="当前角色无权查看审计日志（仅审计）。";
+}
+$("ingestBtn").onclick=async()=>{
+  const f=$("receiptFile").files[0];if(!f){$("ingestNotice").textContent="请先选择CSV";return;}
+  const fd=new FormData();fd.append("file",f);
+  try{const j=await api("/api/receipts/ingest",{method:"POST",body:fd});
+    $("ingestNotice").innerHTML=`<span class="ok">新增 ${j.metrics.inserted} 行，重复跳过 ${j.metrics.duplicates} 行，隔离 ${j.metrics.quarantine} 行</span>`;
+    if(j.quarantine.length)$("ingestNotice").title=JSON.stringify(j.quarantine,null,2);
+    refreshAll();}catch(e){$("ingestNotice").innerHTML=`<span class="bad">${esc(e.message)}（${esc(e.code)}）</span>`;}
+};
+$("buildBtn").onclick=async()=>{
+  try{const j=await api("/api/receipts/visa/build",{method:"POST",body:{period:$("period").value}});
+    $("buildOut").innerHTML=`<span class="ok">预览就绪：${j.receipt_count} 行，文档摘要 ${j.document_digest.slice(0,16)}…（构建不改原件、不产生版本）</span>`;
+  }catch(e){$("buildOut").innerHTML=`<span class="bad">${esc(e.message)}</span>`;}
+};
+$("publishBtn").onclick=async()=>{
+  try{const j=await api("/api/receipts/visa/publish",{method:"POST",body:{period:$("period").value,simulate_failure:$("simFail").checked}});
+    $("publishNotice").innerHTML=`<span class="tag ${j.action}">${j.action==="created"?"已发布新版本":"重试命中台账，复用原签证（未新增）"}</span>`;
+    refreshAll();}
+  catch(e){$("publishNotice").innerHTML=`<span class="tag failed">${esc(e.message)}</span>`;refreshAll();}
+};
+$("revealBtn").onclick=async()=>{
+  const no=$("traceNo").value.trim();if(!no||!activeVisa){$("revealNotice").textContent="需要回单号且已有生效签证";return;}
+  try{const j=await api(`/api/receipts/visa/${activeVisa.visa_no}/reveal/${encodeURIComponent(no)}`);
+    $("revealNotice").innerHTML=j.verification.all_ok?'<span class="ok">HMAC 令牌全部匹配，脱敏行可回到该原始回单（操作已入审计日志）</span>':'<span class="bad">核验未通过</span>';
+    $("revealOut").textContent=JSON.stringify(j,null,2);refreshAll();}
+  catch(e){$("revealNotice").innerHTML=`<span class="bad">${esc(e.message)}</span>`;}
+};
+$("exportBtn").onclick=()=>{if(activeVisa)window.location=`/api/receipts/visa/${activeVisa.visa_no}/export`;};
+refreshAll();
+</script></body></html>
